@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>PRY</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main>
+    <canvas id="screen" width="640" height="480"></canvas>
+
+    <div id="controls" aria-label="On-screen controls">
+      <div class="dpad" role="group" aria-label="Move">
+        <button class="btn dpad-up"    data-key="ArrowUp"    aria-label="Up">&#9650;</button>
+        <button class="btn dpad-left"  data-key="ArrowLeft"  aria-label="Left">&#9664;</button>
+        <button class="btn dpad-down"  data-key="ArrowDown"  aria-label="Down">&#9660;</button>
+        <button class="btn dpad-right" data-key="ArrowRight" aria-label="Right">&#9654;</button>
+      </div>
+      <div class="actions" role="group" aria-label="Actions">
+        <button class="btn action-a" data-key="z" aria-label="A">A</button>
+        <button class="btn action-b" data-key="x" aria-label="B">B</button>
+      </div>
+    </div>
+  </main>
+  <script src="js/main.js"></script>
+</body>
+</html>
