@@ -124,6 +124,8 @@
   };
 
   // ---- Levels ------------------------------------------------------------
+  // Each level has a payable cost (replays scale with progression), a par time,
+  // and a base reward + per-second time bonus. Difficulty scales rewards.
   // Level 1 is the wood-floor room. Hedge walls all around, one cracked tile
   // that triggers the ogre (first-battle "just kidding" cutscene applies).
   // Frog Sword pickup sits right next to player start — "very easy to spot."
@@ -148,17 +150,39 @@
         { x: 2, y: 1, item: 'frog_sword' },
       ],
       npcs: [],     // acorn vendors arrive in later levels
+      // --- Meta-loop economy fields ---
+      difficulty: 1,
+      playCost: 0,        // first play of level 1 is free
+      replayCost: 10,     // any subsequent run costs this
+      parTime: 30,        // seconds — under par earns time bonus
+      baseReward: 50,
+      timeBonusPer: 5,    // $ per whole second under par
     };
   }
+
+  const LEVELS = { 1: buildLevel1() };
+
+  // ---- Store catalog (purchasable upgrades) ------------------------------
+  const STORE = {
+    bank_upgrade_1: {
+      id: 'bank_upgrade_1',
+      name: 'Bank +5 slots',
+      cost: 50,
+      apply: (player) => { player.bank.capacity += 5; },
+    },
+  };
 
   // ---- Initial state factory ---------------------------------------------
   function initialState() {
     return {
-      mode: 'attract',  // 'attract' | 'explore' | 'battle' | 'cutscene' | 'gameover'
+      // 'attract' → 'explore' → 'reward' → 'store' → back to 'explore' (replay)
+      // future: 'battle' | 'cutscene' | 'gameover'
+      mode: 'attract',
       player: {
         x: 1, y: 1,
         hp: 100, maxHp: 100,
         level: 1, xp: 0,
+        cash: 0,                       // economy currency
         frogCount: frogsAtLevel(1),   // 2 frogs at start
         transform: null,               // null | 'mario' | 'peach'
         inventory: {
@@ -169,11 +193,21 @@
           blueberry: 0,
           redberry: 0,
         },
+        bank: {
+          capacity: 10,                // purchasable upgrades increase this
+          items: {},                   // long-term storage between runs
+        },
+        ownedUpgrades: {},             // store purchases (one-time flags)
         flags: {
           firstBattleSeen: false,      // gates the "just kidding!" rainbow cutscene
         },
       },
-      level: buildLevel1(),
+      level: LEVELS[1],                // current level being played
+      // run = the active playthrough of a level (null when not exploring)
+      run: null,
+      // run shape: { levelId, startedAt, timeElapsed, itemsCollected, cashCollected }
+      lastRun: null,
+      // lastRun shape: { ...run, outcome: 'win'|'lose'|'quit', breakdown: {...} }
       battle: null,
       // battle shape (when active):
       // { enemyId, enemyHp, enemyMaxHp, turn: 'player'|'enemy',
@@ -193,6 +227,8 @@
     ITEMS,
     POWERUPS,
     ACORN_TRADES,
+    LEVELS,
+    STORE,
     frogsAtLevel,
     initialState,
     state: initialState(),
