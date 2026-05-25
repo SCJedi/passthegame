@@ -176,8 +176,11 @@
   function initialState() {
     return {
       // 'attract' → 'explore' → 'reward' → 'store' → back to 'explore' (replay)
-      // future: 'battle' | 'cutscene' | 'gameover'
+      // 'battle' triggered from explore (e.g. stepping on crack)
+      // 'bag' is a paused sub-mode entered from explore or battle (B button)
+      // future: 'cutscene' | 'gameover'
       mode: 'attract',
+      returnFromBag: null,            // mode to restore when bag closes
       player: {
         x: 1, y: 1,
         hp: 100, maxHp: 100,
