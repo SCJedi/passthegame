@@ -213,6 +213,61 @@
   }
 
   // ====================================================================
+  // CHARACTER CREATOR
+  // ====================================================================
+
+  const SPR = PRY.SPRITES;
+  const SECTIONS = [
+    { key: 'gender',      label: 'GENDER',  opts: ['boy', 'girl'] },
+    { key: 'skin',        label: 'SKIN',    opts: ['light', 'dark'] },
+    { key: 'hairColor',   label: 'HAIR',    opts: ['blonde', 'brown'] },
+    { key: 'hairStyle',   label: 'STYLE',   opts: null },  // gender-dependent
+    { key: 'shirtColor',  label: 'SHIRT',   opts: SPR.CLOTH_KEYS },
+    { key: 'bottomColor', label: 'BOTTOM',  opts: SPR.CLOTH_KEYS },
+    { key: 'jacketColor', label: 'JACKET',  opts: ['none', ...SPR.CLOTH_KEYS] },
+  ];
+
+  // Where to go after the player confirms the character creator (e.g. 'attract'
+  // on first run, 'store' when remaking from level select).
+  let creatorReturnAction = 'startRun1';
+
+  function optionsFor(section, appearance) {
+    if (section.key === 'hairStyle') return SPR.HAIR_STYLES[appearance.gender];
+    return section.opts;
+  }
+
+  function openCharacterCreator(returnAction) {
+    creatorReturnAction = returnAction;
+    if (!state.player.appearance) {
+      state.player.appearance = SPR.defaultAppearance();
+    }
+    state.character = { selectedSection: 0 };
+    state.mode = 'character';
+  }
+
+  function cycleOption(dir) {
+    const c = state.character;
+    const sec = SECTIONS[c.selectedSection];
+    const app = state.player.appearance;
+    const opts = optionsFor(sec, app);
+    const cur = app[sec.key];
+    let i = opts.indexOf(cur);
+    if (i === -1) i = 0;
+    i = (i + dir + opts.length) % opts.length;
+    app[sec.key] = opts[i];
+    // If gender changed, hairStyle may now be invalid — reset to first.
+    if (sec.key === 'gender') {
+      app.hairStyle = SPR.HAIR_STYLES[app.gender][0];
+    }
+  }
+
+  function confirmCharacter() {
+    if (creatorReturnAction === 'startRun1') startRun(1);
+    else if (creatorReturnAction === 'store') state.mode = 'store';
+    else state.mode = 'attract';
+  }
+
+  // ====================================================================
   // META-LOOP — mode transitions (attract/explore/reward/store)
   // ====================================================================
 
@@ -304,7 +359,20 @@
   function handleInput(key) {
     switch (state.mode) {
       case 'attract':
-        startRun(1); return;
+        if (!state.player.appearance) openCharacterCreator('startRun1');
+        else startRun(1);
+        return;
+
+      case 'character': {
+        const c = state.character;
+        if      (key === 'ArrowUp')    c.selectedSection = (c.selectedSection - 1 + SECTIONS.length) % SECTIONS.length;
+        else if (key === 'ArrowDown')  c.selectedSection = (c.selectedSection + 1) % SECTIONS.length;
+        else if (key === 'ArrowLeft')  cycleOption(-1);
+        else if (key === 'ArrowRight') cycleOption(+1);
+        else if (key === 'z' || key === 'Enter') confirmCharacter();
+        else if (key === 'x')          state.mode = 'attract';
+        return;
+      }
 
       case 'explore':
         if      (key === 'ArrowUp')    tryMove( 0, -1);
@@ -338,6 +406,7 @@
 
       case 'store':
         if      (key === 'ArrowUp')              buyStoreItem('bank_upgrade_1');
+        else if (key === 'c' || key === 'C')     openCharacterCreator('store');
         else if (key === 'z' || key === 'Enter') startRun(state.lastRun?.levelId ?? 1);
         else if (key === 'x')                    state.mode = 'attract';
         return;
@@ -413,29 +482,50 @@
         const tile = lvl.tiles[y][x];
         const px = originX + x * tileSize;
         const py = originY + y * tileSize;
-        let fill = '#000';
-        if      (tile === PRY.TILE.WOOD)  fill = '#5a3a1a';
-        else if (tile === PRY.TILE.HEDGE) fill = '#1c4a1c';
-        else if (tile === PRY.TILE.CRACK) fill = '#3a2410';
-        else if (tile === PRY.TILE.TUBE)  fill = '#00404a';
-        ctx.fillStyle = fill;
-        ctx.fillRect(px, py, tileSize - 1, tileSize - 1);
-        if (tile === PRY.TILE.CRACK) {
+        if (tile === PRY.TILE.WOOD) {
+          SPR.drawWoodTile(ctx, px, py, tileSize);
+        } else if (tile === PRY.TILE.HEDGE) {
+          SPR.drawHedgeTile(ctx, px, py, tileSize);
+        } else if (tile === PRY.TILE.CRACK) {
+          SPR.drawWoodTile(ctx, px, py, tileSize);
+          // crack lines: a few jagged dark strokes overlaid
+          ctx.strokeStyle = '#1a0a04';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(px + tileSize * 0.15, py + tileSize * 0.20);
+          ctx.lineTo(px + tileSize * 0.55, py + tileSize * 0.45);
+          ctx.lineTo(px + tileSize * 0.30, py + tileSize * 0.75);
+          ctx.lineTo(px + tileSize * 0.80, py + tileSize * 0.85);
+          ctx.stroke();
+          // dashed red warning border
           ctx.strokeStyle = '#ff2b2b';
           ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
           ctx.strokeRect(px + 2, py + 2, tileSize - 5, tileSize - 5);
           ctx.setLineDash([]);
         } else if (tile === PRY.TILE.TUBE) {
-          // pulsing cyan exit tube
-          const pulse = 0.6 + 0.4 * Math.sin(t * 0.15);
+          SPR.drawWoodTile(ctx, px, py, tileSize);
+          const pulse = 0.5 + 0.5 * Math.sin(t * 0.15);
+          // dark hole
+          ctx.fillStyle = '#001418';
+          ctx.beginPath();
+          ctx.arc(px + tileSize / 2, py + tileSize / 2, tileSize * 0.36, 0, Math.PI * 2);
+          ctx.fill();
+          // cyan rim
           ctx.strokeStyle = '#00f0ff';
           ctx.shadowColor = '#00f0ff';
           ctx.shadowBlur = 14 * pulse;
-          ctx.lineWidth = 2;
+          ctx.lineWidth = 3;
           ctx.beginPath();
-          ctx.arc(px + tileSize / 2, py + tileSize / 2, tileSize * 0.32, 0, Math.PI * 2);
+          ctx.arc(px + tileSize / 2, py + tileSize / 2, tileSize * 0.34, 0, Math.PI * 2);
           ctx.stroke();
+          // upward arrows inside
           ctx.shadowBlur = 0;
+          ctx.fillStyle = '#00f0ff';
+          ctx.beginPath();
+          ctx.moveTo(px + tileSize / 2, py + tileSize * 0.30);
+          ctx.lineTo(px + tileSize * 0.62, py + tileSize * 0.50);
+          ctx.lineTo(px + tileSize * 0.38, py + tileSize * 0.50);
+          ctx.closePath(); ctx.fill();
         }
       }
     }
@@ -443,20 +533,25 @@
     for (const pk of lvl.pickups) {
       const px = originX + pk.x * tileSize;
       const py = originY + pk.y * tileSize;
-      ctx.fillStyle = '#ffd400';
-      ctx.shadowColor = '#ffd400'; ctx.shadowBlur = 10;
-      ctx.fillRect(px + tileSize * 0.30, py + tileSize * 0.30,
-                   tileSize * 0.40, tileSize * 0.40);
-      ctx.shadowBlur = 0;
+      if (pk.item === 'frog_sword') {
+        SPR.drawSwordPickup(ctx, px + tileSize / 2, py + tileSize / 2, tileSize * 0.8, t);
+      } else {
+        ctx.fillStyle = '#ffd400';
+        ctx.fillRect(px + tileSize * 0.30, py + tileSize * 0.30, tileSize * 0.40, tileSize * 0.40);
+      }
     }
     // player
     const p = state.player;
-    const cx = originX + p.x * tileSize + tileSize / 2;
-    const cy = originY + p.y * tileSize + tileSize / 2;
-    ctx.fillStyle = '#ff2bd6';
-    ctx.shadowColor = '#ff2bd6'; ctx.shadowBlur = 18;
-    ctx.beginPath(); ctx.arc(cx, cy, tileSize * 0.32, 0, Math.PI * 2); ctx.fill();
-    ctx.shadowBlur = 0;
+    const pcx = originX + p.x * tileSize + tileSize / 2;
+    const pcy = originY + p.y * tileSize + tileSize / 2;
+    if (state.player.appearance) {
+      SPR.drawCharacter(ctx, pcx, pcy, tileSize * 1.05, state.player.appearance);
+    } else {
+      ctx.fillStyle = '#ff2bd6';
+      ctx.shadowColor = '#ff2bd6'; ctx.shadowBlur = 18;
+      ctx.beginPath(); ctx.arc(pcx, pcy, tileSize * 0.32, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+    }
   }
 
   function drawExplore(w, h) {
@@ -491,27 +586,21 @@
     const enemy = PRY.ENEMIES[b.enemyId];
 
     neonText(w / 2, h * 0.08, 'BATTLE', h * 0.05, '#ff2bd6');
-    neonText(w / 2, h * 0.16, enemy.name, h * 0.035, '#ffd400');
+    neonText(w / 2, h * 0.16, enemy.name, h * 0.030, '#ffd400');
 
-    // enemy
-    ctx.fillStyle = '#2a0a0a';
-    ctx.fillRect(w * 0.55, h * 0.22, w * 0.30, h * 0.32);
-    ctx.strokeStyle = '#ff2b2b';
-    ctx.shadowColor = '#ff2b2b'; ctx.shadowBlur = 12;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(w * 0.55, h * 0.22, w * 0.30, h * 0.32);
-    ctx.shadowBlur = 0;
-    neonText(w * 0.70, h * 0.58, `HP ${b.enemyHp}/${b.enemyMaxHp}`, h * 0.022, '#ff2b2b', 8);
+    // floor strip
+    ctx.fillStyle = '#3a2410';
+    ctx.fillRect(w * 0.05, h * 0.55, w * 0.90, h * 0.03);
 
-    // player
-    ctx.fillStyle = '#0a0a2a';
-    ctx.fillRect(w * 0.15, h * 0.30, w * 0.25, h * 0.24);
-    ctx.strokeStyle = '#ff2bd6';
-    ctx.shadowColor = '#ff2bd6'; ctx.shadowBlur = 12;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(w * 0.15, h * 0.30, w * 0.25, h * 0.24);
-    ctx.shadowBlur = 0;
-    neonText(w * 0.275, h * 0.58, `HP ${state.player.hp}/${state.player.maxHp}`, h * 0.022, '#ff2bd6', 8);
+    // enemy sprite (ogre)
+    SPR.drawOgre(ctx, w * 0.70, h * 0.42, Math.min(w, h) * 0.45, t);
+    neonText(w * 0.70, h * 0.61, `HP ${b.enemyHp}/${b.enemyMaxHp}`, h * 0.022, '#ff2b2b', 8);
+
+    // player sprite (character)
+    if (state.player.appearance) {
+      SPR.drawCharacter(ctx, w * 0.28, h * 0.42, Math.min(w, h) * 0.40, state.player.appearance);
+    }
+    neonText(w * 0.28, h * 0.61, `HP ${state.player.hp}/${state.player.maxHp}`, h * 0.022, '#ff2bd6', 8);
 
     if (b.shieldRoundsLeft > 0) {
       neonText(w / 2, h * 0.64, `▸ shield: ${b.shieldRoundsLeft} enemy turns`, h * 0.022, '#00f0ff', 8);
@@ -594,6 +683,61 @@
     neonText(w / 2, h * 0.93, 'any key  →  store', h * 0.020, '#888', 8);
   }
 
+  function drawCharacterCreator(w, h) {
+    const app = state.player.appearance;
+    const c = state.character;
+    neonText(w / 2, h * 0.07, 'CHARACTER', h * 0.045, '#ffd400');
+
+    // preview pane (left half)
+    // floor under feet
+    ctx.fillStyle = '#1c4a1c';
+    ctx.fillRect(w * 0.05, h * 0.78, w * 0.40, h * 0.04);
+    SPR.drawCharacter(ctx, w * 0.25, h * 0.50, h * 0.58, app);
+
+    // options list (right half)
+    const x0 = w * 0.52;
+    const x1 = w * 0.95;
+    const y0 = h * 0.16;
+    const dy = h * 0.085;
+    for (let i = 0; i < SECTIONS.length; i++) {
+      const sec = SECTIONS[i];
+      const opts = optionsFor(sec, app);
+      const cur = app[sec.key];
+      const y = y0 + dy * i;
+      const selected = (i === c.selectedSection);
+      // row backdrop when selected
+      if (selected) {
+        ctx.fillStyle = 'rgba(255, 43, 214, 0.10)';
+        ctx.fillRect(x0 - 6, y - h * 0.030, (x1 - x0) + 12, h * 0.058);
+        ctx.strokeStyle = '#ff2bd6';
+        ctx.shadowColor = '#ff2bd6'; ctx.shadowBlur = 10;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x0 - 6, y - h * 0.030, (x1 - x0) + 12, h * 0.058);
+        ctx.shadowBlur = 0;
+      }
+      ctx.font = `${Math.floor(h * 0.022)}px 'Press Start 2P', monospace`;
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.fillStyle = selected ? '#ff2bd6' : '#888';
+      ctx.fillText(sec.label, x0, y);
+      ctx.textAlign = 'right';
+      // color swatch for color options
+      const isCloth = SPR.CLOTH_PALETTE[cur];
+      if (isCloth) {
+        ctx.fillStyle = isCloth;
+        ctx.fillRect(x1 - h * 0.055, y - h * 0.015, h * 0.03, h * 0.03);
+        ctx.fillStyle = selected ? '#fff' : '#aaa';
+        ctx.fillText(`◂ ${cur.toUpperCase()} ▸`, x1 - h * 0.075, y);
+      } else {
+        ctx.fillStyle = selected ? '#fff' : '#aaa';
+        ctx.fillText(`◂ ${String(cur).toUpperCase()} ▸`, x1, y);
+      }
+    }
+
+    neonText(w / 2, h * 0.93, '▲▼ section   ◂▸ change   A = play   B = back',
+      h * 0.020, '#888', 6);
+  }
+
   function drawStore(w, h) {
     const p = state.player;
     neonText(w / 2, h * 0.08, 'STORE  /  LEVEL SELECT', h * 0.040, '#ffd400');
@@ -637,7 +781,7 @@
     const costStr = playCost === 0 ? 'FREE' : `$${playCost}`;
     neonText(w / 2, h * 0.84, `A / Enter  =  play (${costStr})`,
       h * 0.022, canPlay ? '#00f0ff' : '#555');
-    neonText(w / 2, h * 0.90, 'B  =  back to attract', h * 0.022, '#ff2bd6');
+    neonText(w / 2, h * 0.90, 'B = attract    C = remake character', h * 0.020, '#ff2bd6');
   }
 
   function render() {
@@ -645,12 +789,13 @@
     ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
     drawScanlines(w, h);
     switch (state.mode) {
-      case 'attract': drawAttract(w, h); break;
-      case 'explore': drawExplore(w, h); break;
-      case 'battle':  drawBattle(w, h);  break;
-      case 'bag':     drawBag(w, h);     break;
-      case 'reward':  drawReward(w, h);  break;
-      case 'store':   drawStore(w, h);   break;
+      case 'attract':   drawAttract(w, h);          break;
+      case 'character': drawCharacterCreator(w, h); break;
+      case 'explore':   drawExplore(w, h);          break;
+      case 'battle':    drawBattle(w, h);           break;
+      case 'bag':       drawBag(w, h);              break;
+      case 'reward':    drawReward(w, h);           break;
+      case 'store':     drawStore(w, h);            break;
     }
     t++;
   }

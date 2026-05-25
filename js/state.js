@@ -225,6 +225,7 @@
         },
         ownedUpgrades: {},             // store purchases (one-time flags)
         levelRecords: {},              // { [levelId]: { bestTime, bestScore, bestTier, enemiesDefeated, itemsFound } }
+        appearance: null,              // set in the character creator on first run
         flags: {
           firstBattleSeen: false,      // gates the "just kidding!" rainbow cutscene
         },
