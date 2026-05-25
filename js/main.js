@@ -74,7 +74,9 @@
 
     // Tile effects
     if (tile === PRY.TILE.CRACK) {
-      enterBattle('ogre');
+      enterBattle('ogre', { x: nx, y: ny });
+    } else if (tile === PRY.TILE.TUBE) {
+      finishRun('win');
     }
   }
 
@@ -85,11 +87,10 @@
   }
 
   // ====================================================================
-  // BATTLE — initialize, action-menu wiring
-  // (resolution / enemy turn / win-lose come in step 7)
+  // BATTLE — initialize + resolution (sword damage, enemy turn, win/lose)
   // ====================================================================
 
-  function enterBattle(enemyId) {
+  function enterBattle(enemyId, triggerXY) {
     const e = PRY.ENEMIES[enemyId];
     state.battle = {
       enemyId,
@@ -100,35 +101,102 @@
       stunRoundsLeft: 0,
       debuffs: { attackMinus: 0 },
       attackMenuOpen: false,
-      lastAction: null,        // 'sword' | 'shield' | null
+      lastAction: null,
+      lastEnemyAction: null,
+      lastPlayerDmg: 0,
+      lastEnemyDmg: 0,
       turnsTaken: 0,
+      triggerXY: triggerXY || null,   // where on the map this battle came from
     };
     state.mode = 'battle';
   }
 
-  function fleeBattleDebug() {
-    // TEMPORARY exit until step 7 wires real win/lose resolution
-    state.battle = null;
-    state.mode = 'explore';
-    state.player.x = state.level.playerStart.x;
-    state.player.y = state.level.playerStart.y;
+  function fleeBattle() {
+    // Per rules: leaving the level forfeits everything. No rewards.
+    finishRun('forfeit');
   }
 
   function useSword() {
     const b = state.battle;
-    if (!b) return;
+    if (!b || b.turn !== 'player') return;
+    const dmg = Math.max(0,
+      state.player.frogCount * PRY.ITEMS.frog_sword.damagePerFrog - b.debuffs.attackMinus
+    );
+    b.enemyHp = Math.max(0, b.enemyHp - dmg);
     b.lastAction = 'sword';
-    b.turnsTaken += 1;
+    b.lastPlayerDmg = dmg;
     b.attackMenuOpen = false;
-    // damage calc will land in step 7
+    b.turnsTaken += 1;
+    afterPlayerAction();
   }
+
   function useShield() {
     const b = state.battle;
-    if (!b) return;
+    if (!b || b.turn !== 'player') return;
     const sh = PRY.ITEMS.force_shield;
-    b.lastAction = 'shield';
     b.shieldRoundsLeft = sh.blocksEnemyTurns;
+    b.lastAction = 'shield';
+    b.lastPlayerDmg = 0;
     b.attackMenuOpen = false;
+    b.turnsTaken += 1;
+    afterPlayerAction();
+  }
+
+  function afterPlayerAction() {
+    const b = state.battle;
+    if (!b) return;
+    if (b.enemyHp <= 0) { onEnemyDefeated(); return; }
+    b.turn = 'enemy';
+    enemyTurn();
+  }
+
+  function enemyTurn() {
+    const b = state.battle;
+    if (!b) return;
+    if (b.stunRoundsLeft > 0) {
+      b.stunRoundsLeft -= 1;
+      b.lastEnemyAction = 'stunned (skips turn)';
+      b.lastEnemyDmg = 0;
+    } else {
+      const enemy = PRY.ENEMIES[b.enemyId];
+      let dmg = enemy.attack;
+      if (b.shieldRoundsLeft > 0) {
+        dmg = Math.max(0, dmg - PRY.ITEMS.force_shield.blockDamage);
+        b.shieldRoundsLeft -= 1;
+        b.lastEnemyAction = `attacks (shield -5)`;
+      } else {
+        b.lastEnemyAction = `attacks`;
+      }
+      b.lastEnemyDmg = dmg;
+      state.player.hp = Math.max(0, state.player.hp - dmg);
+    }
+    if (state.player.hp <= 0) { onPlayerDefeated(); return; }
+    b.turn = 'player';
+  }
+
+  function onEnemyDefeated() {
+    const b = state.battle;
+    if (!b) return;
+    const enemy = PRY.ENEMIES[b.enemyId];
+    if (state.run) state.run.enemiesDefeated = (state.run.enemiesDefeated || 0) + 1;
+
+    // Replace the crack with a tube exit at the tile that triggered the battle.
+    if (enemy.onDefeat?.spawnTube && b.triggerXY) {
+      const { x, y } = b.triggerXY;
+      state.level.tiles[y][x] = PRY.TILE.TUBE;
+    }
+    state.battle = null;
+    state.mode = 'explore';
+    // Eject the player off the tube tile so they can choose to step back on
+    // (otherwise they'd instantly clear). Place at the level start.
+    state.player.x = state.level.playerStart.x;
+    state.player.y = state.level.playerStart.y;
+  }
+
+  function onPlayerDefeated() {
+    // HP hit zero in battle. Forfeit run, no reward.
+    state.battle = null;
+    finishRun('lose');
   }
 
   // ====================================================================
@@ -151,11 +219,11 @@
   function startRun(levelId) {
     const lvl = PRY.LEVELS[levelId];
     if (!lvl) return;
-    const isFirstPlay = !state.player.ownedUpgrades['played_' + levelId];
-    const cost = isFirstPlay ? lvl.playCost : lvl.replayCost;
+    // Free until you clear the level; paid replays after that.
+    const hasCleared = !!(state.player.levelRecords[levelId]?.bestScore);
+    const cost = hasCleared ? lvl.replayCost : lvl.playCost;
     if (state.player.cash < cost) return;
     state.player.cash -= cost;
-    state.player.ownedUpgrades['played_' + levelId] = true;
 
     state.mode = 'explore';
     state.level = PRY.initialState().level;   // fresh tile copy (pickups respawn)
@@ -168,6 +236,11 @@
       timeElapsed: 0,
       itemsCollected: 0,
       cashCollected: 0,
+      enemiesDefeated: 0,
+      // Snapshot inventory so forfeit/lose can roll back what was collected mid-run.
+      // (Loadout-from-bank arrives in step 9; for now nothing is "brought in" beyond
+      // what's already in inventory from previous wins.)
+      inventoryAtStart: JSON.parse(JSON.stringify(state.player.inventory)),
     };
   }
 
@@ -176,14 +249,42 @@
     if (!r) return;
     const lvl = PRY.LEVELS[r.levelId];
     const timeSec = r.timeElapsed / 1000;
-    const baseReward = outcome === 'win' ? Math.floor(lvl.baseReward * lvl.difficulty) : 0;
-    const timeBonus  = outcome === 'win' ? Math.max(0, Math.floor((lvl.parTime - timeSec) * lvl.timeBonusPer)) : 0;
-    const itemReward = r.itemsCollected * 5;
-    const total = baseReward + timeBonus + r.cashCollected + itemReward;
+    const win = outcome === 'win';
+    const baseReward = win ? Math.floor(lvl.baseReward * lvl.difficulty) : 0;
+    const timeBonus  = win ? Math.max(0, Math.floor((lvl.parTime - timeSec) * lvl.timeBonusPer)) : 0;
+    const itemReward = win ? r.itemsCollected * 5 : 0;
+    const killReward = win ? (r.enemiesDefeated || 0) * lvl.enemyKillReward : 0;
+    const total = baseReward + timeBonus + r.cashCollected + itemReward + killReward;
     state.player.cash += total;
+
+    // Forfeit / lose: revert items collected this run.
+    if (!win) {
+      state.player.inventory = r.inventoryAtStart;
+    }
+
+    // Update per-level record on win (best time, best score, best tier).
+    let tier = null;
+    if (win) {
+      tier = PRY.tierFor(total, lvl);
+      const rec = state.player.levelRecords[r.levelId] || {};
+      const better = (rec.bestScore === undefined) || total > rec.bestScore;
+      const faster = (rec.bestTime  === undefined) || timeSec < rec.bestTime;
+      state.player.levelRecords[r.levelId] = {
+        bestTime:  faster ? timeSec : rec.bestTime,
+        bestScore: better ? total   : rec.bestScore,
+        bestTier:  PRY.tierFor(Math.max(total, rec.bestScore || 0), lvl),
+        clears:    (rec.clears || 0) + 1,
+        lastEnemiesDefeated: r.enemiesDefeated || 0,
+        lastItemsFound:      r.itemsCollected,
+      };
+    }
+
     state.lastRun = {
-      ...r, outcome, timeSec,
-      breakdown: { baseReward, timeBonus, itemReward, cashCollected: r.cashCollected, total },
+      ...r, outcome, timeSec, tier,
+      breakdown: {
+        baseReward, timeBonus, itemReward, killReward,
+        cashCollected: r.cashCollected, total,
+      },
     };
     state.run = null;
     state.mode = 'reward';
@@ -211,6 +312,7 @@
         else if (key === 'ArrowLeft')  tryMove(-1,  0);
         else if (key === 'ArrowRight') tryMove( 1,  0);
         else if (key === 'x')          openBag('explore');
+        else if (key === 'Enter')      finishRun('forfeit');   // leave any time = forfeit
         return;
 
       case 'battle': {
@@ -223,7 +325,7 @@
         }
         if      (key === 'z')     b.attackMenuOpen = true;
         else if (key === 'x')     openBag('battle');
-        else if (key === 'Enter') fleeBattleDebug();   // temporary
+        else if (key === 'Enter') fleeBattle();   // skippable = forfeit
         return;
       }
 
@@ -319,11 +421,21 @@
         ctx.fillStyle = fill;
         ctx.fillRect(px, py, tileSize - 1, tileSize - 1);
         if (tile === PRY.TILE.CRACK) {
-          // dashed red "danger" border on the cracked tile
           ctx.strokeStyle = '#ff2b2b';
           ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
           ctx.strokeRect(px + 2, py + 2, tileSize - 5, tileSize - 5);
           ctx.setLineDash([]);
+        } else if (tile === PRY.TILE.TUBE) {
+          // pulsing cyan exit tube
+          const pulse = 0.6 + 0.4 * Math.sin(t * 0.15);
+          ctx.strokeStyle = '#00f0ff';
+          ctx.shadowColor = '#00f0ff';
+          ctx.shadowBlur = 14 * pulse;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(px + tileSize / 2, py + tileSize / 2, tileSize * 0.32, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.shadowBlur = 0;
         }
       }
     }
@@ -368,8 +480,9 @@
 
     const inv = state.player.inventory;
     const sword = inv.frog_sword ? 'FROG SWORD' : '—';
-    neonText(w * 0.30, h * 0.93, `Sword: ${sword}`, h * 0.020, '#ffd400', 6);
-    neonText(w * 0.70, h * 0.93, 'B = bag   arrows = walk', h * 0.020, '#888', 6);
+    neonText(w * 0.20, h * 0.93, `Sword: ${sword}`, h * 0.020, '#ffd400', 6);
+    neonText(w * 0.55, h * 0.93, 'B = bag   arrows = walk', h * 0.020, '#888', 6);
+    neonText(w * 0.85, h * 0.93, '[ENTER] leave', h * 0.018, '#555', 4);
   }
 
   function drawBattle(w, h) {
@@ -401,11 +514,17 @@
     neonText(w * 0.275, h * 0.58, `HP ${state.player.hp}/${state.player.maxHp}`, h * 0.022, '#ff2bd6', 8);
 
     if (b.shieldRoundsLeft > 0) {
-      neonText(w / 2, h * 0.65, `▸ shield: ${b.shieldRoundsLeft} enemy turns`, h * 0.022, '#00f0ff', 8);
+      neonText(w / 2, h * 0.64, `▸ shield: ${b.shieldRoundsLeft} enemy turns`, h * 0.022, '#00f0ff', 8);
     }
-    if (b.lastAction) {
-      neonText(w / 2, h * 0.71, `last: ${b.lastAction.toUpperCase()}`, h * 0.020, '#666', 4);
-    }
+    // turn log
+    const youLine = b.lastAction
+      ? (b.lastAction === 'sword' ? `YOU swing for ${b.lastPlayerDmg}` : 'YOU raise shield')
+      : '';
+    const enemyLine = b.lastEnemyAction
+      ? `${enemy.name.toUpperCase()} ${b.lastEnemyAction}${b.lastEnemyDmg ? ` for ${b.lastEnemyDmg}` : ''}`
+      : '';
+    if (youLine)   neonText(w / 2, h * 0.70, youLine,   h * 0.022, '#ff2bd6', 6);
+    if (enemyLine) neonText(w / 2, h * 0.75, enemyLine, h * 0.022, '#ff2b2b', 6);
 
     if (b.attackMenuOpen) {
       // overlay attack menu
@@ -449,34 +568,76 @@
   function drawReward(w, h) {
     const r = state.lastRun; if (!r) return;
     const b = r.breakdown;
-    const title = r.outcome === 'win' ? 'LEVEL CLEAR' : 'RUN ENDED';
-    const titleColor = r.outcome === 'win' ? '#ff2bd6' : '#555';
-    neonText(w / 2, h * 0.14, title, h * 0.06, titleColor);
-    neonText(w / 2, h * 0.24, `time  ${r.timeSec.toFixed(1)}s`, h * 0.028, '#666');
-    let y = h * 0.36; const dy = h * 0.06;
+    let title, titleColor;
+    if      (r.outcome === 'win')     { title = 'LEVEL CLEAR';   titleColor = '#ff2bd6'; }
+    else if (r.outcome === 'lose')    { title = 'YOU DIED';      titleColor = '#ff2b2b'; }
+    else                              { title = 'RUN FORFEITED'; titleColor = '#666';    }
+    neonText(w / 2, h * 0.12, title, h * 0.055, titleColor);
+    neonText(w / 2, h * 0.20, `time  ${r.timeSec.toFixed(1)}s`, h * 0.024, '#666');
+
+    if (r.tier) {
+      const tierColors = { gold: '#ffd400', silver: '#cccccc', bronze: '#cd7f32' };
+      neonText(w / 2, h * 0.29, `★ ${r.tier.toUpperCase()} ★`, h * 0.042, tierColors[r.tier]);
+    }
+
+    let y = h * 0.40; const dy = h * 0.055;
     rowText('BASE',       `$${b.baseReward}`,    y,          w, h, '#00f0ff');
     rowText('TIME BONUS', `$${b.timeBonus}`,     y + dy,     w, h, '#ffd400');
-    rowText('CASH FOUND', `$${b.cashCollected}`, y + dy * 2, w, h, '#00f0ff');
-    rowText('ITEMS',      `$${b.itemReward}`,    y + dy * 3, w, h, '#ff2bd6');
-    rowText('TOTAL',      `$${b.total}`,         y + dy * 4, w, h, '#fff');
-    neonText(w / 2, h * 0.92, 'any key  →  store', h * 0.022, '#888', 8);
+    rowText('KILLS',      `$${b.killReward}`,    y + dy * 2, w, h, '#ff2b2b');
+    rowText('CASH FOUND', `$${b.cashCollected}`, y + dy * 3, w, h, '#00f0ff');
+    rowText('ITEMS',      `$${b.itemReward}`,    y + dy * 4, w, h, '#ff2bd6');
+    rowText('TOTAL',      `$${b.total}`,         y + dy * 5, w, h, '#fff');
+
+    if (r.outcome !== 'win') {
+      neonText(w / 2, h * 0.85, 'items collected mid-run were lost', h * 0.018, '#666');
+    }
+    neonText(w / 2, h * 0.93, 'any key  →  store', h * 0.020, '#888', 8);
   }
 
   function drawStore(w, h) {
     const p = state.player;
-    neonText(w / 2, h * 0.10, 'STORE', h * 0.065, '#ffd400');
-    neonText(w / 2, h * 0.22, `Wallet  $${p.cash}`, h * 0.040, '#00f0ff');
-    neonText(w / 2, h * 0.30, `Bank slots  ${p.bank.capacity}`, h * 0.028, '#fff');
+    neonText(w / 2, h * 0.08, 'STORE  /  LEVEL SELECT', h * 0.040, '#ffd400');
+    neonText(w / 2, h * 0.16, `Wallet  $${p.cash}    Bank slots  ${p.bank.capacity}`,
+      h * 0.025, '#00f0ff');
+
+    // ----- level record card (level 1 only for now) -----
+    const lvl = PRY.LEVELS[state.lastRun?.levelId ?? 1];
+    const rec = p.levelRecords[lvl.id];
+    const maxR = PRY.maxPossibleReward(lvl);
+    neonText(w / 2, h * 0.27, `Lv ${lvl.id}  ${lvl.name}`, h * 0.030, '#ff2bd6');
+
+    const recColor = rec ? '#fff' : '#555';
+    const tierStr  = rec?.bestTier ? `★ ${rec.bestTier.toUpperCase()}` : 'incomplete';
+    const tierColor = rec?.bestTier
+      ? ({ gold: '#ffd400', silver: '#cccccc', bronze: '#cd7f32' })[rec.bestTier]
+      : '#555';
+    neonText(w / 2, h * 0.34, tierStr, h * 0.026, tierColor);
+
+    const bestTimeStr  = rec?.bestTime  ? `${rec.bestTime.toFixed(1)}s` : '—';
+    const bestScoreStr = rec?.bestScore !== undefined ? `$${rec.bestScore}` : '—';
+    const enemiesStr   = rec ? `${rec.lastEnemiesDefeated || 0}/${lvl.enemiesInLevel}` : `0/${lvl.enemiesInLevel}`;
+    const itemsStr     = rec ? `${rec.lastItemsFound || 0}/${lvl.itemsInLevel}`         : `0/${lvl.itemsInLevel}`;
+
+    let y = h * 0.43; const dy = h * 0.045;
+    rowText('record time',     bestTimeStr,    y,          w, h, recColor);
+    rowText('best score',      bestScoreStr,   y + dy,     w, h, recColor);
+    rowText('max possible',    `$${maxR}`,     y + dy * 2, w, h, '#666');
+    rowText('enemies (last)',  enemiesStr,     y + dy * 3, w, h, recColor);
+    rowText('items (last)',    itemsStr,       y + dy * 4, w, h, recColor);
+
+    // ----- store + actions -----
     const item = PRY.STORE.bank_upgrade_1;
     const affordable = p.cash >= item.cost;
-    neonText(w / 2, h * 0.46, `▲  ${item.name}  ($${item.cost})`,
-      h * 0.028, affordable ? '#ff2bd6' : '#555');
-    const lvl = PRY.LEVELS[state.lastRun?.levelId ?? 1];
-    const replayCost = lvl.replayCost;
-    const canReplay = p.cash >= replayCost;
-    neonText(w / 2, h * 0.66, `A / Enter  =  replay ($${replayCost})`,
-      h * 0.025, canReplay ? '#00f0ff' : '#555');
-    neonText(w / 2, h * 0.74, 'B  =  back to attract', h * 0.025, '#ff2bd6');
+    neonText(w / 2, h * 0.75, `▲  ${item.name}  ($${item.cost})`,
+      h * 0.024, affordable ? '#ff2bd6' : '#555');
+
+    const hasCleared = !!(rec?.bestScore);
+    const playCost = hasCleared ? lvl.replayCost : lvl.playCost;
+    const canPlay = p.cash >= playCost;
+    const costStr = playCost === 0 ? 'FREE' : `$${playCost}`;
+    neonText(w / 2, h * 0.84, `A / Enter  =  play (${costStr})`,
+      h * 0.022, canPlay ? '#00f0ff' : '#555');
+    neonText(w / 2, h * 0.90, 'B  =  back to attract', h * 0.022, '#ff2bd6');
   }
 
   function render() {

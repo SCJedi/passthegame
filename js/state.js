@@ -137,7 +137,7 @@
         return TILE.WOOD;
       })
     );
-    tiles[4][5] = TILE.CRACK;   // the trap floor
+    tiles[4][5] = TILE.CRACK;   // the trap floor — triggers ogre on step
 
     return {
       id: 1,
@@ -149,15 +149,38 @@
       pickups: [
         { x: 2, y: 1, item: 'frog_sword' },
       ],
-      npcs: [],     // acorn vendors arrive in later levels
+      npcs: [],
       // --- Meta-loop economy fields ---
       difficulty: 1,
-      playCost: 0,        // first play of level 1 is free
-      replayCost: 10,     // any subsequent run costs this
-      parTime: 30,        // seconds — under par earns time bonus
+      playCost: 0,
+      replayCost: 10,
+      parTime: 30,
       baseReward: 50,
-      timeBonusPer: 5,    // $ per whole second under par
+      timeBonusPer: 5,
+      // --- Scoring meta ---
+      enemiesInLevel: 1,
+      itemsInLevel: 1,
+      enemyKillReward: 10,
     };
+  }
+
+  // Max possible $ for a level — used by tier scoring + level-select UI.
+  function maxPossibleReward(lvl) {
+    return Math.floor(lvl.baseReward * lvl.difficulty)
+         + Math.floor(lvl.parTime * lvl.timeBonusPer)
+         + (lvl.itemsInLevel || 0) * 5
+         + (lvl.enemiesInLevel || 0) * (lvl.enemyKillReward || 0);
+  }
+
+  // Score → tier. Anything below bronze = no tier (forfeit/lose).
+  function tierFor(score, lvl) {
+    const max = maxPossibleReward(lvl);
+    if (max <= 0) return null;
+    const pct = score / max;
+    if (pct >= 0.80) return 'gold';
+    if (pct >= 0.50) return 'silver';
+    if (pct >  0.00) return 'bronze';
+    return null;
   }
 
   const LEVELS = { 1: buildLevel1() };
@@ -201,6 +224,7 @@
           items: {},                   // long-term storage between runs
         },
         ownedUpgrades: {},             // store purchases (one-time flags)
+        levelRecords: {},              // { [levelId]: { bestTime, bestScore, bestTier, enemiesDefeated, itemsFound } }
         flags: {
           firstBattleSeen: false,      // gates the "just kidding!" rainbow cutscene
         },
@@ -233,6 +257,8 @@
     LEVELS,
     STORE,
     frogsAtLevel,
+    maxPossibleReward,
+    tierFor,
     initialState,
     state: initialState(),
   };
