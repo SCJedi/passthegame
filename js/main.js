@@ -70,6 +70,7 @@
       collectPickup(pk.item);
       lvl.pickups.splice(i, 1);
       if (state.run) state.run.itemsCollected += 1;
+      SND.play('pickup_powerup');
     }
 
     // Tile effects
@@ -92,6 +93,7 @@
 
   function enterBattle(enemyId, triggerXY) {
     const e = PRY.ENEMIES[enemyId];
+    SND.play('mode_switch');
     state.battle = {
       enemyId,
       enemyHp: e.hp,
@@ -127,6 +129,7 @@
     b.lastPlayerDmg = dmg;
     b.attackMenuOpen = false;
     b.turnsTaken += 1;
+    SND.play('hit_enemy');
     afterPlayerAction();
   }
 
@@ -139,6 +142,7 @@
     b.lastPlayerDmg = 0;
     b.attackMenuOpen = false;
     b.turnsTaken += 1;
+    SND.play('shield_up');
     afterPlayerAction();
   }
 
@@ -169,6 +173,7 @@
       }
       b.lastEnemyDmg = dmg;
       state.player.hp = Math.max(0, state.player.hp - dmg);
+      if (dmg > 0) SND.play('hit_player');
     }
     if (state.player.hp <= 0) { onPlayerDefeated(); return; }
     b.turn = 'player';
@@ -185,6 +190,7 @@
       const { x, y } = b.triggerXY;
       state.level.tiles[y][x] = PRY.TILE.TUBE;
     }
+    SND.play('enemy_defeat');
     state.battle = null;
     state.mode = 'explore';
     // Eject the player off the tube tile so they can choose to step back on
@@ -217,6 +223,12 @@
   // ====================================================================
 
   const SPR = PRY.SPRITES;
+  const SND = PRY.SOUNDS;
+
+  // Default plain character at boot — character creator is optional, not a gate.
+  if (!state.player.appearance) {
+    state.player.appearance = SPR.defaultAppearance();
+  }
   const SECTIONS = [
     { key: 'gender',      label: 'GENDER',  opts: ['boy', 'girl'] },
     { key: 'skin',        label: 'SKIN',    opts: ['light', 'dark'] },
@@ -343,6 +355,7 @@
     };
     state.run = null;
     state.mode = 'reward';
+    SND.play(win ? 'victory' : 'defeat');
   }
 
   function buyStoreItem(id) {
@@ -357,9 +370,14 @@
   // ====================================================================
 
   function handleInput(key) {
+    // Global: mute toggle in any mode
+    if (key === 'm' || key === 'M') { SND.toggleMuted(); return; }
+    // Lazy-init audio on the first real interaction (browsers require a gesture)
+    SND.init();
+
     switch (state.mode) {
       case 'attract':
-        if (!state.player.appearance) openCharacterCreator('startRun1');
+        if (key === 'c' || key === 'C') openCharacterCreator('attract');
         else startRun(1);
         return;
 
@@ -473,6 +491,7 @@
     if (Math.floor(t / 30) % 2 === 0) {
       neonText(cx, h * 0.78, 'PRESS ANY KEY', h * 0.035, '#00f0ff', 12);
     }
+    neonText(cx, h * 0.90, 'C = make character    M = mute', h * 0.020, '#666', 6);
   }
 
   function drawLevelGrid(w, h, originX, originY, tileSize) {
@@ -784,6 +803,16 @@
     neonText(w / 2, h * 0.90, 'B = attract    C = remake character', h * 0.020, '#ff2bd6');
   }
 
+  function drawMuteIndicator(w, h) {
+    if (!SND.isMuted()) return;
+    ctx.font = `${Math.floor(h * 0.022)}px 'Press Start 2P', monospace`;
+    ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+    ctx.shadowColor = '#ff2b2b'; ctx.shadowBlur = 8;
+    ctx.fillStyle = '#ff2b2b';
+    ctx.fillText('MUTED', w - h * 0.015, h * 0.015);
+    ctx.shadowBlur = 0;
+  }
+
   function render() {
     const w = canvas.clientWidth, h = canvas.clientHeight;
     ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
@@ -797,6 +826,7 @@
       case 'reward':    drawReward(w, h);           break;
       case 'store':     drawStore(w, h);            break;
     }
+    drawMuteIndicator(w, h);
     t++;
   }
 
